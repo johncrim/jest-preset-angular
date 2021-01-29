@@ -1,3 +1,5 @@
+import { normalize } from 'path';
+
 import { CompilerHost, CompilerOptions } from '@angular/compiler-cli';
 import { createCompilerHost } from '@angular/compiler-cli/src/transformers/compiler_host';
 import type { Logger } from 'bs-logger';
@@ -71,27 +73,24 @@ export class NgJestCompiler implements CompilerInstance {
       module: moduleKind,
     };
 
-    if (this._program) {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    if (!this.ngJestConfig.isolatedModules) {
+      /* eslint-disable @typescript-eslint/no-non-null-assertion */
       this._tsHost!.updateMemoryHost(fileName, fileContent);
 
-      let sourceFile: ts.SourceFile | undefined;
-      if (!this._rootNames.includes(fileName)) {
-        this._logger.debug({ fileName }, 'getCompiledOutput: adding file to rootNames and updating Program');
-        this._rootNames = [...this._rootNames, fileName];
-        this._createOrUpdateProgram();
-        sourceFile = this._program.getSourceFile(fileName);
-      } else {
-        sourceFile = this._program.getSourceFile(fileName);
-        if (sourceFile) {
-          const replaceSpan: ts.TextSpan = { start: 0, length: sourceFile.text.length };
-          sourceFile.update(fileContent, { span: replaceSpan, newLength: fileContent.length });
-        }
+      let sourceFile = this._program?.getSourceFile(fileName);
+      if (!sourceFile) {
+        this._logger.debug({ fileName }, 'getCompiledOutput: updating Program');
+        this._createOrUpdateProgram(fileName);
+        sourceFile = this._program!.getSourceFile(fileName);
+      } else if (fileContent !== sourceFile.text) {
+        // Update source content
+        const replaceSpan: ts.TextSpan = { start: 0, length: sourceFile.text.length };
+        sourceFile.update(fileContent, { span: replaceSpan, newLength: fileContent.length });
       }
 
       this._logger.debug({ fileName }, 'getCompiledOutput: compiling using Program');
 
-      const emitResult = this._program.emit(sourceFile, undefined, undefined, undefined, {
+      const emitResult = this._program!.emit(sourceFile, undefined, undefined, undefined, {
         ...customTransformers,
         before: [
           ...(customTransformers.before as Array<ts.TransformerFactory<ts.SourceFile>>),
@@ -101,12 +100,11 @@ export class NgJestCompiler implements CompilerInstance {
            * the transformers are created. Also because program can be updated so we can't push this transformer in
            * _createCompilerHost
            */
-          constructorParametersDownlevelTransform(this._program),
-          replaceResources(this.isAppPath, this._program.getTypeChecker),
+          constructorParametersDownlevelTransform(this._program!),
+          replaceResources(this.isAppPath, this._program!.getTypeChecker),
         ],
       });
 
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       const compiledOutput: [string, string] = this._tsHost!.getEmittedResult();
       const allDiagnostics: ts.Diagnostic[] = [];
       if (this.ngJestConfig.shouldReportDiagnostics(fileName)) {
@@ -114,8 +112,8 @@ export class NgJestCompiler implements CompilerInstance {
 
         allDiagnostics.push(
           ...emitResult.diagnostics,
-          ...this._program.getSyntacticDiagnostics(sourceFile),
-          ...this._program.getSemanticDiagnostics(sourceFile),
+          ...this._program!.getSyntacticDiagnostics(sourceFile),
+          ...this._program!.getSemanticDiagnostics(sourceFile),
         );
       }
       if (!allDiagnostics.length) {
@@ -127,6 +125,7 @@ export class NgJestCompiler implements CompilerInstance {
 
         return '';
       }
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
     } else {
       this._logger.debug({ fileName }, 'getCompiledOutput: compiling as isolated module');
 
@@ -151,7 +150,20 @@ export class NgJestCompiler implements CompilerInstance {
     this._logger.debug({ parsedTsConfig }, '_setupOptions: initializing compiler config');
 
     this._compilerOptions = { ...this._initialCompilerOptions };
-    this._rootNames = parsedTsConfig.rootNames.filter((rootName) => !this.ngJestConfig.isTestFile(rootName));
+    if (this._compilerOptions.incremental === undefined) {
+      this._compilerOptions.incremental = true;
+    }
+
+    this._rootNames = parsedTsConfig.rootNames
+      .filter((rootName) => !this.ngJestConfig.isTestFile(rootName))
+      .map((rootName) => normalize(rootName));
+    if (this.ngJestConfig.jestConfig.setupFiles) {
+      this._rootNames.push(...this.ngJestConfig.jestConfig.setupFiles);
+    }
+    if (this.ngJestConfig.jestConfig.setupFilesAfterEnv) {
+      this._rootNames.push(...this.ngJestConfig.jestConfig.setupFilesAfterEnv);
+    }
+
     if (this._compilerOptions.strictMetadataEmit) {
       this._logger.warn(
         `Using Angular compiler option 'strictMetadataEmit' for applications might cause undefined behavior.`,
@@ -168,16 +180,19 @@ export class NgJestCompiler implements CompilerInstance {
         options: this._compilerOptions,
         tsHost: this._tsHost,
       });
-      this._createOrUpdateProgram();
     }
   }
 
-  private _createOrUpdateProgram(): void {
+  private _createOrUpdateProgram(filePath: string): void {
     const oldTsProgram = this._program;
 
     this._logger.debug(`_createOrUpdateProgram: ${oldTsProgram ? 'update' : 'create'} TypeScript Program`);
 
-    this._program = this._ts.createProgram(this._rootNames, this._compilerOptions, this._compilerHost, oldTsProgram);
+    let rootNames = this._rootNames;
+    if (!rootNames.includes(filePath)) {
+      rootNames = [...this._rootNames, filePath];
+    }
+    this._program = this._ts.createProgram(rootNames, this._compilerOptions, this._compilerHost, oldTsProgram);
   }
 
   /**
