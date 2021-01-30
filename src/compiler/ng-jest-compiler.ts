@@ -157,12 +157,6 @@ export class NgJestCompiler implements CompilerInstance {
     this._rootNames = parsedTsConfig.rootNames
       .filter((rootName) => !this.ngJestConfig.isTestFile(rootName))
       .map((rootName) => normalize(rootName));
-    if (this.ngJestConfig.jestConfig.setupFiles) {
-      this._rootNames.push(...this.ngJestConfig.jestConfig.setupFiles);
-    }
-    if (this.ngJestConfig.jestConfig.setupFilesAfterEnv) {
-      this._rootNames.push(...this.ngJestConfig.jestConfig.setupFilesAfterEnv);
-    }
 
     if (this._compilerOptions.strictMetadataEmit) {
       this._logger.warn(
